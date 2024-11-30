@@ -1,3 +1,5 @@
+use std::num::Wrapping;
+
 #[derive(Clone, Copy)]
 pub struct Key(pub [u32; 8]);
 
@@ -88,4 +90,92 @@ fn xor_32(a: u32, b: u32) -> u32 {
 
 fn xor_64(a: u64, b: u64) -> u64 {
     a ^ b
+}
+
+fn round_encode(block: &mut [u8; 8], state: &mut State) {
+    let first = [block[0], block[1], block[2], block[3]];
+    let secnd = [block[4], block[5], block[6], block[7]];
+    state.n_acc[0] = u32::from_be_bytes(first);
+    state.n_acc[1] = u32::from_be_bytes(secnd);
+
+    for i in 0..24 {
+        state.c_sum[0] = sum_m0(state.x_key[i % 8], state.n_acc[0]);
+        let r = state.substitute(state.c_sum[0]).rotate_left(11);
+        state.c_sum[1] = xor_32(state.n_acc[1], r);
+        state.n_acc[1] = state.n_acc[0];
+        state.n_acc[0] = state.c_sum[1];
+    }
+    for i in 24..32 {
+        state.c_sum[0] = sum_m0(state.x_key[7 - (i % 8)], state.n_acc[0]);
+        let r = state.substitute(state.c_sum[0]).rotate_left(11);
+        state.c_sum[1] = xor_32(state.n_acc[1], r);
+        state.n_acc[1] = state.n_acc[0];
+        state.n_acc[0] = state.c_sum[1];
+    }
+
+    *block = (((state.n_acc[1] as u64) << 32) | state.n_acc[0] as u64).to_be_bytes()
+}
+
+fn round_decode(block: &mut [u8; 8], state: &mut State) {
+    let first = [block[0], block[1], block[2], block[3]];
+    let secnd = [block[4], block[5], block[6], block[7]];
+    state.n_acc[0] = u32::from_be_bytes(first);
+    state.n_acc[1] = u32::from_be_bytes(secnd);
+
+    for i in 0..8 {
+        state.c_sum[0] = sum_m0(state.x_key[i % 8], state.n_acc[0]);
+        let r = state.substitute(state.c_sum[0]).rotate_left(11);
+        state.c_sum[1] = xor_32(state.n_acc[1], r);
+        state.n_acc[1] = state.n_acc[0];
+        state.n_acc[0] = state.c_sum[1];
+    }
+    for i in 8..32 {
+        state.c_sum[0] = sum_m0(state.x_key[7 - (i % 8)], state.n_acc[0]);
+        let r = state.substitute(state.c_sum[0]).rotate_left(11);
+        state.c_sum[1] = xor_32(state.n_acc[1], r);
+        state.n_acc[1] = state.n_acc[0];
+        state.n_acc[0] = state.c_sum[1];
+    }
+
+    *block = (((state.n_acc[1] as u64) << 32) | state.n_acc[0] as u64).to_be_bytes()
+}
+
+pub fn simple_repl_encode(data: &mut [u8], key: Key) {
+    let mut state = State::with(key);
+
+    for block in data.chunks_exact_mut(8) {
+        // can do unwrap since we are in chunks of 8
+        round_encode(block.try_into().unwrap(), &mut state)
+    }
+}
+
+pub fn simple_repl_decode(data: &mut [u8], key: Key) {
+    let mut state = State::with(key);
+
+    for block in data.chunks_exact_mut(8) {
+        // can do unwrap since we are in chunks of 8
+        round_decode(block.try_into().unwrap(), &mut state)
+    }
+}
+
+#[test]
+fn eqeqeqeq() {
+    let key = Key([
+        0x0123, 0x4567, 0x89AB, 0xCDEF, 0x0123, 0x4567, 0x89AB, 0xCDEF,
+    ]);
+
+    let state = State::with(key);
+    let inpt = 0x01829732;
+    let r1 = state.substitute(inpt);
+    let r2 = state.subs_2(inpt);
+
+    assert_eq!(r1, r2)
+}
+
+#[test]
+fn summ() {
+    let r = sum_m1(0x01, 0x0E);
+    assert_eq!(r, 0x0F);
+    let r = sum_m1(0xFFFFFFFF, 0x00000003);
+    assert_eq!(r, 0x03);
 }
