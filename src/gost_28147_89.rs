@@ -69,3 +69,23 @@ impl State {
         u32::from_le_bytes(bytes)
     }
 }
+
+fn sum_m0(a: u32, b: u32) -> u32 {
+    (Wrapping(a) + Wrapping(b)).0
+}
+
+fn sum_m1(a: u32, b: u32) -> u32 {
+    let mut r = (Wrapping(a) + Wrapping(b)).0 + 1;
+    if u32::MAX - b >= a {
+        r -= 1;
+    }
+    r
+}
+
+fn xor_32(a: u32, b: u32) -> u32 {
+    a ^ b
+}
+
+fn xor_64(a: u64, b: u64) -> u64 {
+    a ^ b
+}
