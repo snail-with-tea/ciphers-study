@@ -9,7 +9,10 @@ const C2: u32 = 0b0000_0001_0000_0001_0000_0001_0000_0100;
 pub struct State {
     x_key: [u32; 8],
     n_acc: [u32; 4],
-    c_sum: [u32; 4],
+    // reserved for ciphering
+    c_sum: [u32; 2],
+    // reserved for hashing
+    h_sum: [u32; 2],
     k_blk: [[u64; 2]; 4],
 }
 
@@ -18,7 +21,8 @@ impl Default for State {
         Self {
             x_key: [0; 8],
             n_acc: [0; 4],
-            c_sum: [0; 4],
+            c_sum: [0; 2],
+            h_sum: [0; 2],
             k_blk: [
                 [0x0123456789ABCDEF, 0x1123456789ABCDEF],
                 [0x2123456789ABCDEF, 0x3123456789ABCDEF],
@@ -130,6 +134,16 @@ fn round_decode(state: &mut State) {
     state.n_acc.swap(0, 1);
 }
 
+fn round_hash(state: &mut State) {
+    for i in 0..16 {
+        state.c_sum[0] = sum_m0(state.x_key[i % 8], state.n_acc[0]);
+        let r = state.substitute(state.c_sum[0]).rotate_left(11);
+        state.c_sum[1] = xor_32(state.n_acc[1], r);
+        state.n_acc[1] = state.n_acc[0];
+        state.n_acc[0] = state.c_sum[1];
+    }
+}
+
 pub fn simple_repl_encode(data: &mut [u8], key: Key) {
     let mut state = State::with(key);
 
@@ -151,6 +165,88 @@ pub fn simple_repl_decode(data: &mut [u8], key: Key) {
         [state.n_acc[0], state.n_acc[1]] = u32x2_from_be(*block);
         round_decode(&mut state);
         *block = u32x2_to_be([state.n_acc[0], state.n_acc[1]]);
+    }
+}
+
+pub fn straight_gamma_encode(sync: [u32; 2], data: &mut [u8], key: Key) {
+    let mut state = State::with(key);
+    [state.n_acc[0], state.n_acc[1]] = sync;
+
+    round_encode(&mut state);
+
+    state.n_acc.copy_within(0..2, 2);
+
+    for block in data.chunks_exact_mut(8) {
+        state.n_acc[2] = sum_m0(state.n_acc[2], C1);
+        state.n_acc[3] = sum_m1(state.n_acc[3], C2);
+
+        state.n_acc.copy_within(2..4, 0);
+
+        round_encode(&mut state);
+
+        // can do unwrap since we are in chunks of 8
+        let block: &mut [u8; 8] = block.try_into().unwrap();
+        let [to1, to2] = u32x2_from_be(*block);
+        let tc1 = xor_32(to1, state.n_acc[0]);
+        let tc2 = xor_32(to2, state.n_acc[1]);
+        *block = u32x2_to_be([tc1, tc2]);
+    }
+}
+
+pub fn straight_gamma_decode(sync: [u32; 2], data: &mut [u8], key: Key) {
+    straight_gamma_encode(sync, data, key)
+}
+
+pub fn feedback_gamma_encode(sync: [u32; 2], data: &mut [u8], key: Key) {
+    let mut state = State::with(key);
+    [state.n_acc[0], state.n_acc[1]] = sync;
+
+    for block in data.chunks_exact_mut(8) {
+        round_encode(&mut state);
+
+        // can do unwrap since we are in chunks of 8
+        let block: &mut [u8; 8] = block.try_into().unwrap();
+        let [to1, to2] = u32x2_from_be(*block);
+        let tc1 = xor_32(to1, state.n_acc[0]);
+        let tc2 = xor_32(to2, state.n_acc[1]);
+        *block = u32x2_to_be([tc1, tc2]);
+        state.n_acc[0] = tc1;
+        state.n_acc[1] = tc2;
+    }
+}
+
+pub fn feedback_gamma_decode(sync: [u32; 2], data: &mut [u8], key: Key) {
+    let mut state = State::with(key);
+    [state.n_acc[0], state.n_acc[1]] = sync;
+
+    for block in data.chunks_exact_mut(8) {
+        round_encode(&mut state);
+
+        // can do unwrap since we are in chunks of 8
+        let block: &mut [u8; 8] = block.try_into().unwrap();
+        let [tc1, tc2] = u32x2_from_be(*block);
+        let to1 = xor_32(tc1, state.n_acc[0]);
+        let to2 = xor_32(tc2, state.n_acc[1]);
+        *block = u32x2_to_be([to1, to2]);
+        state.n_acc[0] = tc1;
+        state.n_acc[1] = tc2;
+    }
+}
+
+pub fn generate_hash(data: &mut [u8], key: Key) {
+    let mut state = State::with(key);
+
+    for block in data.chunks_exact_mut(8) {
+        // can do unwrap since we are in chunks of 8
+        let block: &mut [u8; 8] = block.try_into().unwrap();
+        [state.n_acc[0], state.n_acc[1]] = u32x2_from_be(*block);
+        state.n_acc[0] = xor_32(state.n_acc[0], state.h_sum[0]);
+        state.n_acc[1] = xor_32(state.n_acc[1], state.h_sum[1]);
+
+        round_hash(&mut state);
+
+        state.h_sum[0] = state.n_acc[0];
+        state.h_sum[1] = state.n_acc[1];
     }
 }
 
